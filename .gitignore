@@ -1,0 +1,51 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Environments
+.venv
+
+# Ignore requirements.txt as we use poetry and auto generate this in the build
+requirements.txt
+
+
+# Pants workspace files
+/.pants.*
+/dist/
+/.pids
+
+poetry.lock
+
+#macos files
+**/.DS_Store
+.DS_Store
+
+
+#vscode files
+.vscode/*
+!.vscode/settings.default.jsonc

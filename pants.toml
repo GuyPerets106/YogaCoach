@@ -1,0 +1,32 @@
+[GLOBAL]
+pants_version = "2.20.0"
+
+backend_packages = [
+    "pants.backend.python",
+    "pants.backend.python.lint.flake8",
+    "pants.backend.python.lint.isort",
+    "pants.backend.python.lint.black",
+]
+
+[python.resolves]
+python-default = "3rdparty/python/default.lock"
+
+[python]
+enable_resolves = true
+interpreter_constraints = ["==3.11.*"]
+
+[export]
+py_resolve_format = "symlinked_immutable_virtualenv"
+
+[test]
+output = "all"
+report = true
+
+[flake8]
+config = ".flake8"
+
+[isort]
+config = "pyproject.toml"
+
+[black]
+config = "pyproject.toml"
