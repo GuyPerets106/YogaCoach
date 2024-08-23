@@ -32,7 +32,7 @@ def create_main_window():
     # Trainee Selected Yoga Sequence
     yoga_sequence_var = ctk.StringVar()
     yoga_sequence_frame = ctk.CTkFrame(master=container_frame, bg_color="#1C1C1C", fg_color="#1C1C1C")
-    yoga_sequence_frame.grid(row=0, column=0, pady=10, sticky="e")  # Aligned to the right
+    yoga_sequence_frame.grid(row=0, column=0, pady=10, sticky="e")
     resolution_title = ctk.CTkLabel(
         master=yoga_sequence_frame,
         text="Yoga Sequence:",
@@ -56,12 +56,8 @@ def create_main_window():
     # Trainee Name
     name_frame = ctk.CTkFrame(master=container_frame, bg_color="#1C1C1C", fg_color="#1C1C1C")
     name_frame.grid(row=1, column=0, pady=10, sticky="e")
-    name_title = ctk.CTkLabel(
-        master=name_frame, text="Name:", font=("Roboto", font_size, "bold"), bg_color="#1C1C1C", text_color="white"
-    )
-    name_entry = ctk.CTkEntry(
-        master=name_frame, placeholder_text="Default Student", font=("Roboto", font_size), bg_color="black", width=200
-    )
+    name_title = ctk.CTkLabel(master=name_frame, text="Name:", font=("Roboto", font_size, "bold"), bg_color="#1C1C1C", text_color="white")
+    name_entry = ctk.CTkEntry(master=name_frame, placeholder_text="Default Student", font=("Roboto", font_size), bg_color="black", width=200)
     name_title.grid(row=0, column=0, padx=5, pady=5, sticky="e")
     name_entry.grid(row=0, column=1, padx=5, pady=5, sticky="w")
 

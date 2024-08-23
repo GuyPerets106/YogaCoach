@@ -18,15 +18,18 @@ isort = "^5.10.2"
 black = "^22.1.0"
 customtkinter = "^5.2.2"
 
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
+
 [tool.isort]
 profile = "black"
-line_length = 130
+line_length = 150
 
 [tool.black]
-line-length = 130
+line-length = 150
 
 [tool.flake8]
-max-line-length = 130
+max-line-length = 150
 
 [tool.mypy]
 warn_unused_configs = true

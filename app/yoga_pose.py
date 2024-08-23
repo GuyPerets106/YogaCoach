@@ -9,7 +9,7 @@ class YogaPose:
         for joint1, joint2, joint3, angle in joints_angles_tuples:
             self.add_joint_angle(joint1, joint2, joint3, angle)
 
-        print(f"Creating Yoga Pose {self.name} with {self.joints_angles}")
+        # print(f"Creating Yoga Pose {self.name} with {self.joints_angles}")
 
     def __str__(self):
         return f"Pose {self.name}"

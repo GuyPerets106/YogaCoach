@@ -1,8 +1,9 @@
 import cv2
+from definitions import *
 
 
 def calibration():
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(CAM)
     ret, first_frame = cap.read()
     if not ret:
         print("Failed to capture frame.")
@@ -13,12 +14,12 @@ def calibration():
     w = 70
     h = 70
     joints = {
-        "shoulder": (width // 2 - w // 2, height // 5, w, h),  # (x, y, w, h) - xy is the top left corner
-        "elbow": (int(width // 2 + 1 * w), height // 5, w, h),
-        "wrist": (int(width // 2 + 2 * w), height // 5, w, h),
-        "hip": (width // 2 - w // 2, int(height // 5 + 2.75 * h), w, h),
-        "knee": (width // 2 - w // 2, int(height // 5 + 4.5 * h), w, h),
-        "ankle": (width // 2 - w // 2, int(height // 5 + 5.5 * h + 50), w, h),
+        "SHOULDER": (width // 2 - w // 2, height // 5, w, h),  # (x, y, w, h) - xy is the top left corner
+        "ELBOW": (int(width // 2 + 1 * w), height // 5, w, h),
+        "WRIST": (int(width // 2 + 2 * w), height // 5, w, h),
+        "HIP": (width // 2 - w // 2, int(height // 5 + 2.75 * h), w, h),
+        "KNEE": (width // 2 - w // 2, int(height // 5 + 4.5 * h), w, h),
+        "ANKLE": (width // 2 - w // 2, int(height // 5 + 5.5 * h + 50), w, h),
     }
 
     while True:
@@ -41,3 +42,7 @@ def calibration():
     centers = {joint: (rect[0] + rect[2] // 2, rect[1] + rect[3] // 2) for joint, rect in joints.items()}
     # print(f"Centers Are: {centers}")
     return centers
+
+
+if __name__ == "__main__":
+    calibration()
