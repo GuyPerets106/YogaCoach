@@ -76,6 +76,8 @@ def create_main_window():
 
 
 def start_yoga_sequence(name, yoga_sequence):
+    if name == "":
+        name = "Default Student"
     trainee_selected_yoga_sequence = yoga_sequences[yoga_sequence]
     print(f"Starting {yoga_sequence} for {name}")
     print(f"Selected Yoga Sequence: {trainee_selected_yoga_sequence}")

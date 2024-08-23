@@ -66,7 +66,7 @@ class Detector:
         mask = np.zeros_like(old_frame)
         hsv = np.zeros_like(old_gray)
         hsv[..., 1] = 255
-
+        static_frames = 0
         while TRACKING_POSE_FLAG:
             ret, frame = cap.read()
             if not ret:
@@ -117,7 +117,12 @@ class Detector:
             mask[mask < FADE_THRESHOLD] = 0
             img = cv.add(frame, mask)
             self.connect_relevant_joints(img, good_new, show_joint_names=True)
-            self.check_pose(img, good_new)
+            if np.all(p1 - p0 < 2):
+                static_frames += 1
+            else:
+                static_frames = 0
+            if static_frames > STATIC_THRESHOLD:
+                self.check_pose(img, good_new)
             cv.imshow("YogaCoach", img)
             k = cv.waitKey(1)
             if k == 27 or k == ord("q"):
@@ -189,9 +194,9 @@ class Detector:
             cv.line(img, joint2_coords, joint3_coords, (0, 255, 0), 2)
 
             if show_joint_names:
-                cv.putText(img, joint1, joint1_coords, cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv.LINE_AA)
-                cv.putText(img, joint2, joint2_coords, cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv.LINE_AA)
-                cv.putText(img, joint3, joint3_coords, cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv.LINE_AA)
+                cv.putText(img, joint1, joint1_coords, cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 2, cv.LINE_AA)
+                cv.putText(img, joint2, joint2_coords, cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 2, cv.LINE_AA)
+                cv.putText(img, joint3, joint3_coords, cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 2, cv.LINE_AA)
 
     def detect_person(self, frame, backSub, persistent_mask):
         kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5))
