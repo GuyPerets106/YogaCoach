@@ -16,5 +16,4 @@ class YogaPose:
 
     def add_joint_angle(self, joint1: Joint, joint2: Joint, joint3: Joint, angle: float):  # Joint is an abstract class
         assert joint1 != joint2 and joint2 != joint3 and joint1 != joint3, "Joints must be different"
-        assert angle >= 0 and angle <= 180, "Angle must be between 0 and 180 degrees"
         self.joints_angles[(joint1, joint2, joint3)] = angle

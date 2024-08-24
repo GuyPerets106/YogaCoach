@@ -1,6 +1,10 @@
 import cv2 as cv
 import numpy as np
-from yoga_pose import YogaPose
+import os
+import threading
+import subprocess
+from gtts import gTTS
+from pydub import AudioSegment
 from calibration import calibration
 from definitions import *
 
@@ -47,8 +51,9 @@ class Detector:
         self.colors = np.random.randint(0, 255, (100, 3))
         self.count = 0
 
-        for pose in trainee.yoga_poses:
-            self.pose_params = YOGA_POSE_PARAMS[pose.name]  # This is a list of relevant joints and angles between them to the specific pose
+        for pose in self.trainee.yoga_poses:
+            self.curr_pose = pose.name
+            self.pose_params = YOGA_POSE_PARAMS[self.curr_pose]  # This is a list of relevant joints and angles between them to the specific pose
             self.track_pose2(pose)
 
         print("DONE")
@@ -127,7 +132,7 @@ class Detector:
             mask = cv.multiply(mask, FADE_FACTOR)
             mask[mask < FADE_THRESHOLD] = 0
             img = cv.add(frame, mask)
-            self.connect_relevant_joints(img, good_new, show_joint_names=True)
+            self.connect_joints(img, good_new, show_joint_names=True)
             if np.all(p1 - p0 < 2):
                 static_frames += 1
             else:
@@ -196,7 +201,8 @@ class Detector:
         hsv = np.zeros_like(old_gray)
         hsv[..., 1] = 255
         static_frames = 0
-
+        POSE_CHECKED = False
+        COUNT_TO_START = 0
         while TRACKING_POSE_FLAG:
             ret, frame = cap.read()
             if not ret:
@@ -255,13 +261,21 @@ class Detector:
                 if len(selected_joints) == len(JOINT_NAMES):
                     self.connect_joints(img, good_new, show_joint_names=True)
 
-                    if np.all(p1 - p0 < 2):
+                    if COUNT_TO_START < 120:  # Wait for 4 seconds before starting to check the pose
+                        COUNT_TO_START += 1
+                        continue
+                    if np.all(p1 - p0 < 2):  # Start counting static frames
                         static_frames += 1
                     else:
                         static_frames = 0
 
                     if static_frames > STATIC_THRESHOLD:
-                        self.check_pose(img, good_new)
+                        if POSE_CHECKED:
+                            continue
+                        else:
+                            # Open a thread to check the pose
+                            threading.Thread(target=self.check_pose, args=(img, good_new)).start()
+                            POSE_CHECKED = True
 
                 p0 = good_new.reshape(-1, 1, 2) if p0.size != 0 else p0
 
@@ -271,6 +285,12 @@ class Detector:
                 exit()
             elif key == 32:  # Space key
                 TRACKING_POSE_FLAG = False
+            elif key == ord("r"):  # Reset the joints
+                JOINTS_LOCATIONS = {}
+                selected_joints = []
+                p0 = np.array([])
+                kfs = []
+                good_new = np.array([])
 
             old_gray = frame_gray.copy()
 
@@ -281,6 +301,53 @@ class Detector:
 
     def check_pose(self, img, joints_coords):
         for i, (joint1, joint2, joint3, angle) in enumerate(self.pose_params):
+
+            if angle == "90":  # Special Emphasis
+                joint1_idx = JOINT_NAMES.index(joint1)
+                joint3_idx = JOINT_NAMES.index(joint3)
+                joint1_coords = joints_coords[joint1_idx].ravel()
+                joint3_coords = joints_coords[joint3_idx].ravel()
+                # Check only the x coordinates
+                if abs(joint1_coords[0] - joint3_coords[0]) < ANGLE_ERROR_THRESHOLD:
+                    text = f"Good Job {self.trainee.name}! Your {joint3} is 90 degrees to the floor"
+                    # cv.putText(
+                    #     img,
+                    #     text,
+                    #     (10, 30 * (i * 2 + 1)),
+                    #     cv.FONT_HERSHEY_COMPLEX,
+                    #     0.75,
+                    #     (0, 255, 0),
+                    #     1,
+                    #     cv.LINE_AA,
+                    # )
+                    tts = gTTS(text=text, lang="en")
+                    tts.save("speech.mp3")
+                    sound = AudioSegment.from_mp3("speech.mp3")
+                    faster_sound = sound.speedup(playback_speed=1.2)
+                    faster_sound.export("speech_faster.mp3", format="mp3")
+                    subprocess.run(["mpg321", "speech_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    os.system("rm speech.mp3 speech_faster.mp3")
+                else:
+                    text = YOGA_POSE_ALIGNMENT[self.curr_pose][i]
+                    # cv.putText(
+                    #     img,
+                    #     text,
+                    #     (10, 30 * (i * 2 + 1)),
+                    #     cv.FONT_HERSHEY_COMPLEX,
+                    #     0.75,
+                    #     (0, 0, 255),
+                    #     1,
+                    #     cv.LINE_AA
+                    # )
+                    tts = gTTS(text=text, lang="en")
+                    tts.save("speech.mp3")
+                    sound = AudioSegment.from_mp3("speech.mp3")
+                    faster_sound = sound.speedup(playback_speed=1.2)
+                    faster_sound.export("speech_faster.mp3", format="mp3")
+                    subprocess.run(["mpg321", "speech_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    os.system("rm speech.mp3 speech_faster.mp3")
+                continue
+
             joint1_idx = JOINT_NAMES.index(joint1)
             joint2_idx = JOINT_NAMES.index(joint2)
             joint3_idx = JOINT_NAMES.index(joint3)
@@ -293,28 +360,45 @@ class Detector:
             cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
             angle_between_joints = np.arccos(cos_angle)
             text_position = (10, 30 * (i * 2 + 1))
-            if abs(angle_between_joints - angle) < 5:
-                cv.putText(  # TODO CHANGE TO TTS
-                    img,
-                    f"Angle between {joint1}, {joint2} and {joint3} is {np.rad2deg(angle_between_joints):.2f} degrees",
-                    text_position,
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 0),
-                    2,
-                    cv.LINE_AA,
-                )
+            angle_error = abs(angle_between_joints - angle)
+            if angle_error < ANGLE_ERROR_THRESHOLD:
+                text = f"Good Job {self.trainee.name}! Angle between your {joint1}, {joint2} and {joint3} is in the correct range"
+                # cv.putText(
+                #     img,
+                #     text,
+                #     text_position,
+                #     cv.FONT_HERSHEY_COMPLEX,
+                #     0.75,
+                #     (0, 255, 0),
+                #     1,
+                #     cv.LINE_AA,
+                # )
+                tts = gTTS(text=text, lang="en")
+                tts.save("speech.mp3")
+                sound = AudioSegment.from_mp3("speech.mp3")
+                faster_sound = sound.speedup(playback_speed=1.2)
+                faster_sound.export("speech_faster.mp3", format="mp3")
+                subprocess.run(["mpg321", "speech_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                os.system("rm speech.mp3 speech_faster.mp3")
             else:
-                cv.putText(  # TODO CHANGE TO TTS
-                    img,
-                    "FIX YOUR POSE",
-                    text_position,
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 0, 255),
-                    2,
-                    cv.LINE_AA,
-                )
+                text = YOGA_POSE_ALIGNMENT[self.curr_pose][i]
+                # cv.putText(
+                #     img,
+                #     text,
+                #     text_position,
+                #     cv.FONT_HERSHEY_COMPLEX,
+                #     0.75,
+                #     (0, 0, 255),
+                #     1,
+                #     cv.LINE_AA,
+                # )
+                tts = gTTS(text=text, lang="en")
+                tts.save("speech.mp3")
+                sound = AudioSegment.from_mp3("speech.mp3")
+                faster_sound = sound.speedup(playback_speed=1.2)
+                faster_sound.export("speech_faster.mp3", format="mp3")
+                subprocess.run(["mpg321", "speech_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                os.system("rm speech.mp3 speech_faster.mp3")
 
     def connect_joints(self, img, joints_coords, show_joint_names=False):
         # Connect all joint one after the other in the order of JOINT_NAMES
@@ -327,7 +411,7 @@ class Detector:
             cv.line(img, joint1, joint2, (0, 255, 0), 2)
             if show_joint_names:
                 cv.putText(img, JOINT_NAMES[i], joint1, cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 1, cv.LINE_AA)
-                if i == len(joints_coords) - 2:
+                if i == len(joints_coords) - 2:  # Last joint
                     cv.putText(img, JOINT_NAMES[i + 1], joint2, cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 1, cv.LINE_AA)
 
     def detect_person(self, frame, backSub, persistent_mask):
