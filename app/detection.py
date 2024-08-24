@@ -19,6 +19,17 @@ def create_kalman_filters(p0):
     return kalman_filters
 
 
+def create_kalman_filter(p0):
+    kf = cv.KalmanFilter(4, 2)  # 4 dynamic params (x, y, vx, vy), 2 measurement params (x, y)
+    kf.transitionMatrix = np.array([[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32)
+    kf.measurementMatrix = np.eye(2, 4, dtype=np.float32)
+    kf.processNoiseCov = np.eye(4, 4, dtype=np.float32) * 0.03
+    kf.measurementNoiseCov = np.eye(2, 2, dtype=np.float32) * 1
+    kf.errorCovPost = np.eye(4, 4, dtype=np.float32) * 0.1
+    kf.statePost[:2, 0] = p0.ravel()  # Initial position
+    return kf
+
+
 class Detector:
     def __init__(self, trainee):
         self.trainee = trainee
@@ -38,7 +49,7 @@ class Detector:
 
         for pose in trainee.yoga_poses:
             self.pose_params = YOGA_POSE_PARAMS[pose.name]  # This is a list of relevant joints and angles between them to the specific pose
-            self.track_pose(pose)
+            self.track_pose2(pose)
 
         print("DONE")
 
@@ -141,6 +152,133 @@ class Detector:
         cv.destroyAllWindows()
         cv.waitKey(1)
 
+    def track_pose2(self, pose):
+        print(f"Tracking {pose.name}")
+        for (joint1, joint2, joint3), angle in pose.joints_angles.items():
+            print(f"NOTICE: Angle between {joint1}, {joint2} and {joint3} should be {angle}")
+        TRACKING_POSE_FLAG = True
+        JOINTS_LOCATIONS = {}
+        selected_joints = []
+        p0 = np.array([])
+        kfs = []
+        good_new = np.array([])
+
+        def select_joint(event, x, y, flags, param):
+            nonlocal p0, kfs
+            if event == cv.EVENT_LBUTTONDOWN:
+                joint_name = JOINT_NAMES[len(selected_joints)]
+                JOINTS_LOCATIONS[joint_name] = (x, y)
+                selected_joints.append(joint_name)
+
+                new_joint = np.array([(x, y)], dtype=np.float32).reshape(-1, 1, 2)
+                if p0.size == 0:
+                    p0 = new_joint
+                else:
+                    p0 = np.vstack((p0, new_joint))
+                kf = create_kalman_filter(new_joint)
+                kfs.append(kf)
+
+        cap = cv.VideoCapture(CAM)
+        ret, old_frame = cap.read()
+        if not ret:
+            print("Failed to capture frame.")
+            exit()
+
+        old_frame = cv.flip(old_frame, 1)
+        old_gray = cv.cvtColor(old_frame, cv.COLOR_BGR2GRAY)
+        old_gray = cv.GaussianBlur(old_gray, (3, 3), 0)
+
+        # Set up the mouse callback function
+        cv.namedWindow("YogaCoach")
+        cv.setMouseCallback("YogaCoach", select_joint)
+
+        mask = np.zeros_like(old_frame)
+        hsv = np.zeros_like(old_gray)
+        hsv[..., 1] = 255
+        static_frames = 0
+
+        while TRACKING_POSE_FLAG:
+            ret, frame = cap.read()
+            if not ret:
+                print("ERROR: Failed To Capture Frame")
+                exit()
+
+            frame = cv.flip(frame, 1)
+            img = frame.copy()
+            frame_gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+            frame_gray = cv.GaussianBlur(frame_gray, (3, 3), 0)
+
+            if p0.size != 0:
+                predicted_points = []
+                for kf in kfs:
+                    prediction = kf.predict()
+                    predicted_points.append(prediction[:2].reshape(-1))
+
+                predicted_points = np.array(predicted_points, dtype=np.float32).reshape(-1, 1, 2)
+
+                # Calculate optical flow
+                p1, st, err = cv.calcOpticalFlowPyrLK(old_gray, frame_gray, p0, None, **self.lk_params)
+
+                # Select good points
+                if p1 is not None and st is not None:
+                    good_new = []
+                    for i, kf in enumerate(kfs):
+                        if st[i]:
+                            measurement = p1[i].reshape(-1, 1)
+                            kf.correct(measurement)
+                            good_new.append(p1[i].reshape(2))
+                            self.count += 1
+                        else:
+                            if self.count < 100:
+                                self.count += 1
+                                good_new.append(p0[i].reshape(2))
+                            else:
+                                good_new.append(predicted_points[i].reshape(2))
+                else:
+                    print("ERROR: Optical flow calculation failed")
+                    old_gray = frame_gray.copy()
+                    continue
+
+                good_new = np.array(good_new, dtype=np.float32).reshape(-1, 1, 2)
+
+                # Draw the tracks
+                for i, (new, old) in enumerate(zip(good_new, p0)):
+                    a, b = new.ravel()
+                    c, d = old.ravel()
+                    a, b, c, d = int(a), int(b), int(c), int(d)
+                    cv.line(mask, (a, b), (c, d), self.colors[i % len(self.colors)].tolist(), 2)
+                    cv.circle(frame, (a, b), 5, self.colors[i % len(self.colors)].tolist(), -1)
+
+                mask = cv.multiply(mask, FADE_FACTOR)
+                mask[mask < FADE_THRESHOLD] = 0
+                img = cv.add(frame, mask)
+                if len(selected_joints) == len(JOINT_NAMES):
+                    self.connect_joints(img, good_new, show_joint_names=True)
+
+                    if np.all(p1 - p0 < 2):
+                        static_frames += 1
+                    else:
+                        static_frames = 0
+
+                    if static_frames > STATIC_THRESHOLD:
+                        self.check_pose(img, good_new)
+
+                p0 = good_new.reshape(-1, 1, 2) if p0.size != 0 else p0
+
+            cv.imshow("YogaCoach", img)
+            key = cv.waitKey(1)
+            if key == 27 or key == ord("q"):  # ESC key
+                exit()
+            elif key == 32:  # Space key
+                TRACKING_POSE_FLAG = False
+
+            old_gray = frame_gray.copy()
+
+        cap.release()
+        cv.waitKey(1)
+        cv.destroyAllWindows()
+        cv.waitKey(1)
+
     def check_pose(self, img, joints_coords):
         for i, (joint1, joint2, joint3, angle) in enumerate(self.pose_params):
             joint1_idx = JOINT_NAMES.index(joint1)
@@ -178,25 +316,19 @@ class Detector:
                     cv.LINE_AA,
                 )
 
-    def connect_relevant_joints(self, img, joints_coords, show_joint_names=False):
-        for joint1, joint2, joint3, _ in self.pose_params:
-            joint1_idx = JOINT_NAMES.index(joint1)
-            joint2_idx = JOINT_NAMES.index(joint2)
-            joint3_idx = JOINT_NAMES.index(joint3)
-            joint1_coords = joints_coords[joint1_idx].ravel()
-            joint2_coords = joints_coords[joint2_idx].ravel()
-            joint3_coords = joints_coords[joint3_idx].ravel()
-            # Convert to int (pixel coordinates)
-            joint1_coords = tuple(map(int, joint1_coords))
-            joint2_coords = tuple(map(int, joint2_coords))
-            joint3_coords = tuple(map(int, joint3_coords))
-            cv.line(img, joint1_coords, joint2_coords, (0, 255, 0), 2)
-            cv.line(img, joint2_coords, joint3_coords, (0, 255, 0), 2)
-
+    def connect_joints(self, img, joints_coords, show_joint_names=False):
+        # Connect all joint one after the other in the order of JOINT_NAMES
+        for i in range(len(joints_coords) - 1):
+            joint1 = joints_coords[i].ravel()
+            joint2 = joints_coords[i + 1].ravel()
+            # Convert to integers (pixel coordinates)
+            joint1 = tuple(map(int, joint1))
+            joint2 = tuple(map(int, joint2))
+            cv.line(img, joint1, joint2, (0, 255, 0), 2)
             if show_joint_names:
-                cv.putText(img, joint1, joint1_coords, cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 2, cv.LINE_AA)
-                cv.putText(img, joint2, joint2_coords, cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 2, cv.LINE_AA)
-                cv.putText(img, joint3, joint3_coords, cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 2, cv.LINE_AA)
+                cv.putText(img, JOINT_NAMES[i], joint1, cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 1, cv.LINE_AA)
+                if i == len(joints_coords) - 2:
+                    cv.putText(img, JOINT_NAMES[i + 1], joint2, cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 1, cv.LINE_AA)
 
     def detect_person(self, frame, backSub, persistent_mask):
         kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5))
