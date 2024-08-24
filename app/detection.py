@@ -3,6 +3,7 @@ import numpy as np
 import os
 import threading
 import subprocess
+import time
 from gtts import gTTS
 from pydub import AudioSegment
 from calibration import calibration
@@ -52,11 +53,38 @@ class Detector:
         self.count = 0
 
         for pose in self.trainee.yoga_poses:
+            self.CALIB_DONE = False
             self.curr_pose = pose.name
+            threading.Thread(target=self.explain_calibration, args=()).start()  # Changes CALIB_DONE to True
             self.pose_params = YOGA_POSE_PARAMS[self.curr_pose]  # This is a list of relevant joints and angles between them to the specific pose
+            self.overlay_video_path = YOGA_POSE_VIDEOS[self.curr_pose]
+            self.correct_alignments = [False] * len(self.pose_params)
             self.track_pose2(pose)
+            self.CALIB_DONE = False
 
         print("DONE")
+
+    def explain_pose(self, pose):
+        text = YOGA_POSE_EXPLAINATION[pose]
+        tts = gTTS(text=text, lang="en")
+        tts.save("pose_exp.mp3")
+        sound = AudioSegment.from_mp3("pose_exp.mp3")
+        faster_sound = sound.speedup(playback_speed=1.2)
+        faster_sound.export("pose_exp_faster.mp3", format="mp3")
+        subprocess.run(["mpg321", "pose_exp_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.system("rm pose_exp.mp3 pose_exp_faster.mp3")
+        self.POSE_EXPLAINATION_DONE = True
+
+    def explain_calibration(self):
+        text = CALIBRATION_EXPLAINATION
+        tts = gTTS(text=text, lang="en")
+        tts.save("calib_exp.mp3")
+        sound = AudioSegment.from_mp3("calib_exp.mp3")
+        faster_sound = sound.speedup(playback_speed=1.2)
+        faster_sound.export("calib_exp_faster.mp3", format="mp3")
+        subprocess.run(["mpg321", "calib_exp_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.system("rm calib_exp.mp3 calib_exp_faster.mp3")
+        self.CALIB_DONE = True
 
     def track_pose(self, pose):
         print(f"Tracking {pose.name}")
@@ -171,17 +199,18 @@ class Detector:
         def select_joint(event, x, y, flags, param):
             nonlocal p0, kfs
             if event == cv.EVENT_LBUTTONDOWN:
-                joint_name = JOINT_NAMES[len(selected_joints)]
-                JOINTS_LOCATIONS[joint_name] = (x, y)
-                selected_joints.append(joint_name)
+                if len(selected_joints) < len(JOINT_NAMES):
+                    joint_name = JOINT_NAMES[len(selected_joints)]
+                    JOINTS_LOCATIONS[joint_name] = (x, y)
+                    selected_joints.append(joint_name)
 
-                new_joint = np.array([(x, y)], dtype=np.float32).reshape(-1, 1, 2)
-                if p0.size == 0:
-                    p0 = new_joint
-                else:
-                    p0 = np.vstack((p0, new_joint))
-                kf = create_kalman_filter(new_joint)
-                kfs.append(kf)
+                    new_joint = np.array([(x, y)], dtype=np.float32).reshape(-1, 1, 2)
+                    if p0.size == 0:
+                        p0 = new_joint
+                    else:
+                        p0 = np.vstack((p0, new_joint))
+                    kf = create_kalman_filter(new_joint)
+                    kfs.append(kf)
 
         cap = cv.VideoCapture(CAM)
         ret, old_frame = cap.read()
@@ -202,7 +231,9 @@ class Detector:
         hsv[..., 1] = 255
         static_frames = 0
         POSE_CHECKED = False
+        POSE_EXAPLAINED = False
         COUNT_TO_START = 0
+        overlay = cv.VideoCapture(self.overlay_video_path)
         while TRACKING_POSE_FLAG:
             ret, frame = cap.read()
             if not ret:
@@ -258,27 +289,42 @@ class Detector:
                 mask = cv.multiply(mask, FADE_FACTOR)
                 mask[mask < FADE_THRESHOLD] = 0
                 img = cv.add(frame, mask)
-                if len(selected_joints) == len(JOINT_NAMES):
+                if len(selected_joints) == len(JOINT_NAMES) and self.CALIB_DONE:
+                    # Measure time it takes to connect all joints
+                    if not POSE_EXAPLAINED:
+                        threading.Thread(target=self.explain_pose, args=(self.curr_pose,)).start()
+                        self.POSE_EXPLAINATION_DONE = False
+                        POSE_EXAPLAINED = True
                     self.connect_joints(img, good_new, show_joint_names=True)
 
-                    if COUNT_TO_START < 120:  # Wait for 4 seconds before starting to check the pose
+                    if COUNT_TO_START < WAIT_FOR_POSE:  # Wait for 4 seconds before starting to check the pose
                         COUNT_TO_START += 1
-                        continue
-                    if np.all(p1 - p0 < 2):  # Start counting static frames
-                        static_frames += 1
                     else:
-                        static_frames = 0
-
-                    if static_frames > STATIC_THRESHOLD:
-                        if POSE_CHECKED:
-                            continue
+                        if np.all(p1 - p0 < 2):  # Start counting static frames
+                            static_frames += 1
                         else:
-                            # Open a thread to check the pose
-                            threading.Thread(target=self.check_pose, args=(img, good_new)).start()
-                            POSE_CHECKED = True
+                            static_frames = 0
+
+                        if static_frames > STATIC_THRESHOLD and self.POSE_EXPLAINATION_DONE:
+                            if not POSE_CHECKED:
+                                threading.Thread(target=self.check_pose, args=(img, good_new, self.correct_alignments)).start()
+                                POSE_CHECKED = True
+                            if self.correct_alignments.count(True) == len(self.correct_alignments):
+                                break  # Move to next pose
+                            else:
+                                COUNT_TO_START -= WAIT_FOR_POSE
+                                static_frames = 0
+                                POSE_CHECKED = False
 
                 p0 = good_new.reshape(-1, 1, 2) if p0.size != 0 else p0
 
+            # Add Overlay video in small part of the frame
+            ret, overlay_frame = overlay.read()
+            if not ret:
+                overlay.set(cv.CAP_PROP_POS_FRAMES, 0)
+                continue
+            overlay_frame = cv.resize(overlay_frame, (int(0.3 * frame.shape[1]), int(0.3 * frame.shape[0])))
+            img[0 : overlay_frame.shape[0], 0 : overlay_frame.shape[1]] = overlay_frame
             cv.imshow("YogaCoach", img)
             key = cv.waitKey(1)
             if key == 27 or key == ord("q"):  # ESC key
@@ -291,6 +337,9 @@ class Detector:
                 p0 = np.array([])
                 kfs = []
                 good_new = np.array([])
+                POSE_EXAPLAINED = False
+                self.POSE_CHECKED = False
+                self.correct_alignments = [False] * len(self.pose_params)
 
             old_gray = frame_gray.copy()
 
@@ -299,9 +348,12 @@ class Detector:
         cv.destroyAllWindows()
         cv.waitKey(1)
 
-    def check_pose(self, img, joints_coords):
+    def check_pose(self, img, joints_coords, alignments_to_check):
+        correct_alignments = [False] * len(self.pose_params)
         for i, (joint1, joint2, joint3, angle) in enumerate(self.pose_params):
-
+            if alignments_to_check[i]:
+                continue
+            filename = f"speech_{joint1}_{joint2}_{joint3}_{angle}"
             if angle == "90":  # Special Emphasis
                 joint1_idx = JOINT_NAMES.index(joint1)
                 joint3_idx = JOINT_NAMES.index(joint3)
@@ -321,12 +373,13 @@ class Detector:
                     #     cv.LINE_AA,
                     # )
                     tts = gTTS(text=text, lang="en")
-                    tts.save("speech.mp3")
-                    sound = AudioSegment.from_mp3("speech.mp3")
+                    tts.save(f'{filename}.mp3')
+                    sound = AudioSegment.from_mp3(f'{filename}.mp3')
                     faster_sound = sound.speedup(playback_speed=1.2)
-                    faster_sound.export("speech_faster.mp3", format="mp3")
-                    subprocess.run(["mpg321", "speech_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    os.system("rm speech.mp3 speech_faster.mp3")
+                    faster_sound.export(f"{filename}_faster.mp3", format="mp3")
+                    subprocess.run(["mpg321", f"{filename}_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    os.system(f"rm {filename}.mp3 {filename}_faster.mp3")
+                    correct_alignments[i] = True
                 else:
                     text = YOGA_POSE_ALIGNMENT[self.curr_pose][i]
                     # cv.putText(
@@ -340,12 +393,13 @@ class Detector:
                     #     cv.LINE_AA
                     # )
                     tts = gTTS(text=text, lang="en")
-                    tts.save("speech.mp3")
-                    sound = AudioSegment.from_mp3("speech.mp3")
+                    tts.save(f'{filename}.mp3')
+                    sound = AudioSegment.from_mp3(f'{filename}.mp3')
                     faster_sound = sound.speedup(playback_speed=1.2)
-                    faster_sound.export("speech_faster.mp3", format="mp3")
-                    subprocess.run(["mpg321", "speech_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    os.system("rm speech.mp3 speech_faster.mp3")
+                    faster_sound.export(f"{filename}_faster.mp3", format="mp3")
+                    subprocess.run(["mpg321", f"{filename}_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    os.system(f"rm {filename}.mp3 {filename}_faster.mp3")
+
                 continue
 
             joint1_idx = JOINT_NAMES.index(joint1)
@@ -358,11 +412,11 @@ class Detector:
             v1 = joint1_coords - joint2_coords
             v2 = joint3_coords - joint2_coords
             cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
-            angle_between_joints = np.arccos(cos_angle)
+            angle_between_joints = abs(np.rad2deg(np.arccos(cos_angle)) - 180)
             text_position = (10, 30 * (i * 2 + 1))
             angle_error = abs(angle_between_joints - angle)
             if angle_error < ANGLE_ERROR_THRESHOLD:
-                text = f"Good Job {self.trainee.name}! Angle between your {joint1}, {joint2} and {joint3} is in the correct range"
+                text = f"Good Job {self.trainee.name}! {int(angle_between_joints)} between your {joint1}, {joint2} and {joint3} is in the correct range"
                 # cv.putText(
                 #     img,
                 #     text,
@@ -374,12 +428,13 @@ class Detector:
                 #     cv.LINE_AA,
                 # )
                 tts = gTTS(text=text, lang="en")
-                tts.save("speech.mp3")
-                sound = AudioSegment.from_mp3("speech.mp3")
+                tts.save(f'{filename}.mp3')
+                sound = AudioSegment.from_mp3(f'{filename}.mp3')
                 faster_sound = sound.speedup(playback_speed=1.2)
-                faster_sound.export("speech_faster.mp3", format="mp3")
-                subprocess.run(["mpg321", "speech_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                os.system("rm speech.mp3 speech_faster.mp3")
+                faster_sound.export(f"{filename}_faster.mp3", format="mp3")
+                subprocess.run(["mpg321", f"{filename}_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                os.system(f"rm {filename}.mp3 {filename}_faster.mp3")
+                correct_alignments[i] = True
             else:
                 text = YOGA_POSE_ALIGNMENT[self.curr_pose][i]
                 # cv.putText(
@@ -393,12 +448,14 @@ class Detector:
                 #     cv.LINE_AA,
                 # )
                 tts = gTTS(text=text, lang="en")
-                tts.save("speech.mp3")
-                sound = AudioSegment.from_mp3("speech.mp3")
+                tts.save(f'{filename}.mp3')
+                sound = AudioSegment.from_mp3(f'{filename}.mp3')
                 faster_sound = sound.speedup(playback_speed=1.2)
-                faster_sound.export("speech_faster.mp3", format="mp3")
-                subprocess.run(["mpg321", "speech_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                os.system("rm speech.mp3 speech_faster.mp3")
+                faster_sound.export(f"{filename}_faster.mp3", format="mp3")
+                subprocess.run(["mpg321", f"{filename}_faster.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                os.system(f"rm {filename}.mp3 {filename}_faster.mp3")
+
+            self.correct_alignments = correct_alignments
 
     def connect_joints(self, img, joints_coords, show_joint_names=False):
         # Connect all joint one after the other in the order of JOINT_NAMES
@@ -414,7 +471,7 @@ class Detector:
                 if i == len(joints_coords) - 2:  # Last joint
                     cv.putText(img, JOINT_NAMES[i + 1], joint2, cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 1, cv.LINE_AA)
 
-    def detect_person(self, frame, backSub, persistent_mask):
+    def detect_person(self, frame, backSub, persistent_mask):  # ! NOT USED
         kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5))
         height, width = frame.shape[:2]
         roi = frame[int(height * 0.1) : int(height * 0.9), int(width * 0.25) : int(width * 0.75)]
